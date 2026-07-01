@@ -1,0 +1,17 @@
+termo-astana/
+├── backend/
+│   ├── app/
+│   │   ├── __init__.py
+│   │   ├── main.py            # FastAPI роуты (расчеты, экономика, список зданий)
+│   │   ├── thermal_engine.py  # Математика теплопотерь и AI-подбор изоляции
+│   │   ├── buildings_db.py    # Хранилище характеристик зданий (mock-data)
+│   │   └── schemas.py         # Pydantic модели
+│   └── requirements.txt
+│
+└── frontend/
+    ├── index.html             # Панель управления для Акимата / ЖКХ
+    ├── css/
+    │   └── style.css          # Строгий, монохромный интерфейс с яркими тепловыми акцентами
+    └── js/
+        ├── app.js             # Запросы к API
+        └── charts.js          # Графики окупаемости (ROI) и экономии энергии
