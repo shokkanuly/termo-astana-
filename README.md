@@ -1,75 +1,94 @@
-# TermoAstana (Digital Thermal Twin)
+# TermoAstana — Digital Thermal Twin
 
-TermoAstana is a digital thermal twin application for the city of Astana. It gathers real-time heat loss telemetry, maps building insulation performance, and simulates district-wide waste metrics to prioritize thermal upgrades.
+TermoAstana is a high-performance Digital Thermal Twin application for the city of Astana. It implements spatial analytics, physics-based simulations, and live telemetry to monitor building insulation performance, identify heat loss anomalies, and model the financial feasibility of insulation upgrades at city-wide scale.
 
-## Features
+---
 
-- **Live Telemetry & Dashboard**:
-  - Monitors facade temperature, ambient temperature, humidity, and heat loss.
-  - Features real-time WebSocket communication to broadcast live sensor readings from edge nodes.
-  - Displays virtual node status, system coverages, and peak metrics.
-- **Interactive Astana Map**:
-  - Renders building positions, roads, river paths, and district overlays (Esil, Saryarka, Almaty, Baikonyr, Sarayshyk) with heat intensity values.
-- **Dynamic Building Analysis & ROI Calculator**:
-  - Calculates building heat loss (kW) based on material layers (e.g. brick, modern insulation, khrushchyovka standard) and outside ambient temperature.
-  - Models the return on investment (ROI) of thermal renovation packages, showing the amortized costs over a 5-year period.
-- **IoT Edge Emulator**:
-  - A standalone script (`simulator/iot_emulator.py`) simulating up to 100 virtual nodes (and hardware prototype ESP32 anchors) broadcasting telemetry packages to the backend.
+## 🚀 Key Features
 
-## Directory Structure
+* **3D Building Extrusion Map**: Renders real-world 3D building models color-coded by thermal energy loss intensity (Green $\rightarrow$ Orange $\rightarrow$ Red) built using MapLibre GL and React.
+* **Dynamic Bounding Box (BBOX) Loading**: Scaled to support the entire city of Astana (15,000+ buildings). Leverages PostGIS indexes (`ST_MakeEnvelope`, `ST_Intersects`) and fetches geometry bounds dynamically only when panning/zooming stops (`onMoveEnd`), capping payload sizes to keep client/server memory footprints stable.
+* **Performance Zoom Gating**: Automatically hides 3D building rendering and pauses API polling when zoomed out (`zoom < 14`), displaying a glowing warning HUD overlays: `⚠️ Zoom in to load thermal polygons`.
+* **Physics-Based Interpolation Engine**: Dropped mock hardware generators in favor of a native ASGI-based simulation loop:
+  - **Astana Weather Worker**: Polling routine running every 15 minutes to cache current temperature and wind speed for Astana from the Open-Meteo API.
+  - **SNiP (СНиП) Thermal Equations**: Calculates baseline heat loss using building geometry facade areas and material resistance coefficients:
+    $$\text{Heat Loss (W)} = \frac{\text{Facade Area}}{\text{Thermal Resistance (R)}} \times (21.0 - T_{\text{out}})$$
+  - **Gaussian Fluctuation Stream**: Streams telemetry packets every 1 second over WebSockets, applying a $2\%$ Gaussian standard deviation noise to simulate smart meter sensor fluctuation.
+* **Interactive Polygon Drill-Down**: Click on any building footprint on the map to display its glowing neon-cyan border outline and instantly populate its thermal passport sheet (address, height, window ratio, insulation upgrade ROI curve, and 24h consumption charts).
+
+---
+
+## 📂 Project Architecture
 
 ```text
-termo astana/
-├── backend/               # FastAPI python backend
-│   ├── main.py            # Uvicorn bootstrapper (port 8000)
-│   ├── requirements.txt   # Python dependency list
+termo-astana/
+├── backend/                  # FastAPI Backend Application
+│   ├── main.py               # Uvicorn entry point & WebSocket server (port 8008)
+│   ├── requirements.txt      # Python backend dependencies
 │   ├── app/
-│   │   ├── buildings_db.py  # Mock database of Astana structures & materials
-│   │   ├── city_map.py      # Map dimensions, geometry paths, and coordinates
-│   │   ├── main.py          # FastAPI server, REST routes, and WebSocket endpoints
-│   │   ├── schemas.py       # Pydantic schemas for request/response validation
-│   │   └── thermal_engine.py # Math formula solver (heat loss, ROI, waste cost)
-│   └── simulator/
-│       └── iot_emulator.py  # WebSocket simulation client to mimic ESP32 edge sensors
-└── frontend/              # Web dashboard frontend
-    ├── index.html         # Live thermal twin dashboard view
-    ├── css/               # Core design styles
-    └── js/                # WebSocket client, SVG map canvas renderer, and UI controllers
+│   │   ├── database.py       # PostGIS database pool & TimescaleDB schema manager
+│   │   ├── osm_ingest.py     # Grid partition Overpass API downloader & PostGIS parser
+│   │   ├── thermal_engine.py # SNiP physics equations & database simulator queries
+│   │   ├── weather.py        # Open-Meteo API client with a 10-minute cache
+│   │   ├── weather_worker.py # Background asyncio weather poller task
+│   │   └── websocket_server.py # 1-second WebSocket telemetry broadcast loops
+│   └── simulator/            # Archive emulator scripts (Deprecated)
+└── frontend/                 # React + Vite Client Dashboard
+    ├── index.html            # Main HTML wrapper
+    ├── src/
+    │   ├── main.jsx          # React app mounter
+    │   ├── App.jsx           # Dashboard layout, state machine, and data coordination
+    │   ├── MapComponent.jsx  # MapLibre GL 3D wrapper with selection outline handlers
+    │   ├── App.css           # Styling rules (industrial dark theme, HUD overlays, warnings)
+    │   └── index.css         # Global browser resetting
+    └── vite.config.js        # Port proxies for dev redirecting
 ```
 
-## Tech Stack
+---
 
-- **Backend**: Python 3, FastAPI, Uvicorn, Websockets
-- **Simulator**: Python asyncio, websockets
-- **Frontend**: Vanilla HTML5, SVG canvas mapping, CSS3, Vanilla JavaScript
+## 🛠️ Technology Stack
 
-## Setup & Running Locally
+* **Database**: TimescaleDB + PostGIS 3 (running via Docker on Port `5435`)
+* **Backend**: Python 3.11, FastAPI, Uvicorn, Websockets, psycopg2
+* **Frontend**: React 18, Vite, MapLibre GL, Recharts, Lucide Icons, Vanilla CSS3
 
-### 1. Launch the FastAPI Backend
+---
+
+## 💻 Local Setup & Development
+
+### 1. Database Setup (Docker Compose)
+Launch the PostGIS container:
 ```bash
-cd "termo astana/backend"
+docker compose up -d
+```
+The database will automatically initialize its schema and extensions.
 
-# Create a virtual environment and activate it
+### 2. FastAPI Backend Setup
+```bash
+cd backend
+
+# Create a virtual environment
 python3 -m venv .venv
 source .venv/bin/activate
 
 # Install requirements
 pip install -r requirements.txt
 
-# Start backend server (runs on port 8000)
+# Start backend server (runs on http://127.0.0.1:8008)
 python main.py
 ```
+*Note: On first startup, the backend automatically performs a grid-partitioned fetch from Overpass API to ingest Astana's building polygons if the database is empty.*
 
-### 2. Launch the IoT Simulator
-In a separate terminal (with the virtual environment active):
+### 3. Frontend Client Setup
+In a separate terminal:
 ```bash
-cd "termo astana/backend"
-source .venv/bin/activate
+cd frontend
 
-# Run emulator (streams mock telemetry from 100 virtual nodes to backend)
-python simulator/iot_emulator.py
+# Install packages
+npm install
+
+# Start Vite dev server (runs on http://localhost:5173/)
+npm run dev
 ```
 
-### 3. Open the Frontend
-Since static files are mounted on the same host inside the FastAPI server, you can view the fully responsive map dashboard by navigating to:
-`http://127.0.0.1:8000`
+Open `http://localhost:5173` in your browser to view the Digital Thermal Twin dashboard.
