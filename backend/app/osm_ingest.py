@@ -28,25 +28,53 @@ MATERIAL_PRESETS = [
 ]
 
 def fetch_osm_buildings():
-    query = f"""
-    [out:json][timeout:30];
-    (
-      way["building"]({BBOX[0]},{BBOX[1]},{BBOX[2]},{BBOX[3]});
-      relation["building"]({BBOX[0]},{BBOX[1]},{BBOX[2]},{BBOX[3]});
-    );
-    out geom;
-    """
-    try:
-        print(f"Querying Overpass API for Astana buildings in bounds: {BBOX}...")
-        response = requests.post(OVERPASS_URL, data={"data": query}, timeout=15)
-        response.raise_for_status()
-        data = response.json()
-        elements = data.get("elements", [])
-        print(f"Overpass API returned {len(elements)} elements.")
-        if len(elements) > 5:
-            return elements
-    except Exception as e:
-        print(f"Failed to fetch from Overpass API: {e}. Using fallback local coordinates generator.")
+    min_lat, min_lon, max_lat, max_lon = 51.02, 71.30, 51.24, 71.60
+    rows, cols = 4, 4
+    lat_step = (max_lat - min_lat) / rows
+    lon_step = (max_lon - min_lon) / cols
+
+    all_elements = {}
+    headers = {
+        "User-Agent": "TermoAstanaDigitalTwin/3.0 (contact: admin@termoastana.kz)"
+    }
+
+    cell_idx = 1
+    total_cells = rows * cols
+    for r in range(rows):
+        for c in range(cols):
+            c_min_lat = min_lat + r * lat_step
+            c_max_lat = c_min_lat + lat_step
+            c_min_lon = min_lon + c * lon_step
+            c_max_lon = c_min_lon + lon_step
+
+            query = f"""
+            [out:json][timeout:35];
+            (
+              way["building"]({c_min_lat:.4f},{c_min_lon:.4f},{c_max_lat:.4f},{c_max_lon:.4f});
+              relation["building"]({c_min_lat:.4f},{c_min_lon:.4f},{c_max_lat:.4f},{c_max_lon:.4f});
+            );
+            out geom;
+            """
+            try:
+                print(f"[{cell_idx}/{total_cells}] Querying Overpass API for grid cell: ({c_min_lat:.4f}, {c_min_lon:.4f}, {c_max_lat:.4f}, {c_max_lon:.4f})...")
+                response = requests.post(OVERPASS_URL, data={"data": query}, headers=headers, timeout=40)
+                response.raise_for_status()
+                data = response.json()
+                elements = data.get("elements", [])
+                print(f"  Received {len(elements)} elements.")
+                for el in elements:
+                    el_id = el.get("id")
+                    if el_id:
+                        all_elements[el_id] = el
+            except Exception as e:
+                print(f"  Error fetching cell: {e}")
+            cell_idx += 1
+            time.sleep(1)
+
+    print(f"Total unique OSM elements retrieved: {len(all_elements)}")
+    if len(all_elements) > 10:
+        return list(all_elements.values())
+    
     return generate_fallback_buildings()
 
 def generate_fallback_buildings(count=40):
@@ -87,6 +115,18 @@ def generate_fallback_buildings(count=40):
         })
     return elements
 
+def get_element_geometry(el):
+    if el.get("type") == "way":
+        return el.get("geometry", [])
+    elif el.get("type") == "relation":
+        # Extract the geometry from 'outer' member ways
+        outer_points = []
+        for member in el.get("members", []):
+            if member.get("role") == "outer" and member.get("geometry"):
+                outer_points.extend(member["geometry"])
+        return outer_points
+    return []
+
 def ingest_data():
     elements = fetch_osm_buildings()
     if not elements:
@@ -100,7 +140,7 @@ def ingest_data():
             
             inserted_count = 0
             for el in elements:
-                geom_points = el.get("geometry", [])
+                geom_points = get_element_geometry(el)
                 if not geom_points or len(geom_points) < 3:
                     continue
                 

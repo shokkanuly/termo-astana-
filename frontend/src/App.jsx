@@ -23,6 +23,7 @@ function App() {
   
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedBuildingData, setSelectedBuildingData] = useState(null);
+  const [selectedBuilding, setSelectedBuilding] = useState(null);
   const [tickerRows, setTickerRows] = useState([]);
   
   // Map HUD coordinates state
@@ -44,11 +45,12 @@ function App() {
 
   // 1. Fetch GeoJSON buildings when viewport bounds change
   const fetchBuildings = async (bounds) => {
-    let url = '/api/v1/buildings/geojson';
-    if (bounds) {
-      const { west, south, east, north } = bounds;
-      url += `?min_lon=${west}&min_lat=${south}&max_lon=${east}&max_lat=${north}`;
+    if (!bounds || viewState.zoom < 14) {
+      setGeoJSONData({ type: 'FeatureCollection', features: [] });
+      return;
     }
+    const { west, south, east, north } = bounds;
+    const url = `/api/v1/buildings/geojson?min_lon=${west}&min_lat=${south}&max_lon=${east}&max_lat=${north}`;
     try {
       const res = await fetch(url);
       const data = await res.json();
@@ -223,7 +225,10 @@ function App() {
                 <div 
                   key={b.id} 
                   className={`building-card ${b.id === activeBuildingId ? 'active' : ''}`}
-                  onClick={() => setActiveBuildingId(b.id)}
+                  onClick={() => {
+                    setActiveBuildingId(b.id);
+                    setSelectedBuilding(b);
+                  }}
                 >
                   <div className="building-address">{b.address}</div>
                   <div className="building-details">
@@ -304,10 +309,21 @@ function App() {
             )}
           </div>
 
+          {/* ZOOM WARNING OVERLAY */}
+          {viewState.zoom < 14 && (
+            <div className="zoom-warning-hud">
+              ⚠️ Zoom in to load thermal polygons
+            </div>
+          )}
+
           <MapComponent
             geoJSONData={geoJSONData}
             activeBuildingId={activeBuildingId}
-            onSelectBuilding={setActiveBuildingId}
+            onSelectBuilding={(id) => {
+              setActiveBuildingId(id);
+              const b = buildingList.find(item => item.id === id);
+              if (b) setSelectedBuilding(b);
+            }}
             onBoundsChange={fetchBuildings}
             onViewportChange={setViewState}
             radiusActive={radiusActive}
@@ -321,16 +337,20 @@ function App() {
         <aside className="right-panel">
           <div className="panel-header">
             <div className="panel-title">Паспорт Теплопотерь Здания</div>
-            {selectedBuildingData ? (
+            {selectedBuilding ? (
               <div style={{ fontSize: '14px', fontWeight: 'bold' }}>
-                {selectedBuildingData.building_info.address}
+                {selectedBuilding.address}
               </div>
-            ) : (
-              <span className="text-muted">Загрузка данных...</span>
-            )}
+            ) : null}
           </div>
 
-          {selectedBuildingData && (
+          {!selectedBuilding ? (
+            <div className="passport-empty-state">
+              <div className="empty-state-scanner"></div>
+              <div className="empty-state-title">AWAITING TARGET ACQUISITION</div>
+              <div className="empty-state-subtitle">SELECT A NODE ON THE MAP</div>
+            </div>
+          ) : (
             <div className="passport-body">
               {/* IF ACTIVE PHYSICAL ANOMALY FLAGGED */}
               {tickerRows[0]?.is_anomaly && tickerRows[0]?.building_id === activeBuildingId && (
@@ -347,20 +367,20 @@ function App() {
                   <div className="grid-stat-box">
                     <span className="grid-stat-label">Материал</span>
                     <span className="grid-stat-val text-neon-cyan" style={{ fontSize: '10px' }}>
-                      {selectedBuildingData.building_info.material.replace('_', ' ')}
+                      {selectedBuilding.material ? selectedBuilding.material.replace('_', ' ') : 'N/A'}
                     </span>
                   </div>
                   <div className="grid-stat-box">
                     <span className="grid-stat-label">Площадь фасада</span>
-                    <span className="grid-stat-val">{selectedBuildingData.building_info.facade_area_m2} м²</span>
+                    <span className="grid-stat-val">{selectedBuilding.facade_area_m2} м²</span>
                   </div>
                   <div className="grid-stat-box">
                     <span className="grid-stat-label">Высота</span>
-                    <span className="grid-stat-val">{selectedBuildingData.building_info.height} м</span>
+                    <span className="grid-stat-val">{selectedBuilding.height} м</span>
                   </div>
                   <div className="grid-stat-box">
                     <span className="grid-stat-label">Окна / Кровля</span>
-                    <span className="grid-stat-val">{selectedBuildingData.building_info.window_area_m2} / {selectedBuildingData.building_info.roof_area_m2} м²</span>
+                    <span className="grid-stat-val">{selectedBuilding.window_area_m2} / {selectedBuilding.roof_area_m2} м²</span>
                   </div>
                 </div>
               </div>
@@ -368,7 +388,7 @@ function App() {
               {/* TIMESCALEDB TEMPERATURE LOGS */}
               <div className="section-card">
                 <div className="section-card-title">ПОТРЕБЛЕНИЕ ЭНЕРГИИ (24ч)</div>
-                {selectedBuildingData.history?.length > 0 ? (
+                {selectedBuildingData && selectedBuildingData.building_info.id === selectedBuilding.id && selectedBuildingData.history?.length > 0 ? (
                   <div className="chart-box">
                     <ResponsiveContainer width="100%" height="100%">
                       <LineChart data={selectedBuildingData.history}>
@@ -382,7 +402,7 @@ function App() {
                   </div>
                 ) : (
                   <div className="text-center text-muted py-5" style={{ fontSize: '11px' }}>
-                    Нет активной телеметрии датчиков. Запустите esp32_mock.py
+                    Загрузка профиля энергопотребления...
                   </div>
                 )}
               </div>
@@ -390,43 +410,51 @@ function App() {
               {/* ROI & ENERGO CALC */}
               <div className="section-card">
                 <div className="section-card-title">ИНСУЛЯЦИЯ ROI (Теплоизоляция)</div>
-                <div className="roi-pitch-text mb-3">
-                  {selectedBuildingData.metrics.pitch}
-                </div>
-                <div className="grid-stats mb-3">
-                  <div className="grid-stat-box">
-                    <span className="grid-stat-label">Стоимость апгрейда</span>
-                    <span className="grid-stat-val text-neon-orange">
-                      {selectedBuildingData.metrics.estimated_cost_kzt.toLocaleString()} ₸
-                    </span>
+                {selectedBuildingData && selectedBuildingData.building_info.id === selectedBuilding.id ? (
+                  <>
+                    <div className="roi-pitch-text mb-3">
+                      {selectedBuildingData.metrics.pitch}
+                    </div>
+                    <div className="grid-stats mb-3">
+                      <div className="grid-stat-box">
+                        <span className="grid-stat-label">Стоимость апгрейда</span>
+                        <span className="grid-stat-val text-neon-orange">
+                          {selectedBuildingData.metrics.estimated_cost_kzt.toLocaleString()} ₸
+                        </span>
+                      </div>
+                      <div className="grid-stat-box">
+                        <span className="grid-stat-label">Экономия в сезон</span>
+                        <span className="grid-stat-val text-neon-green">
+                          {selectedBuildingData.metrics.yearly_saving_kzt.toLocaleString()} ₸
+                        </span>
+                      </div>
+                    </div>
+                    
+                    {/* ROI Amortization curve chart */}
+                    <div className="chart-box">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={
+                          selectedBuildingData.chart_data.years.map((y, idx) => ({
+                            year: y,
+                            'Без ремонта': selectedBuildingData.chart_data.without_renovation_accumulated_kzt[idx],
+                            'С ремонтом': selectedBuildingData.chart_data.with_renovation_accumulated_kzt[idx]
+                          }))
+                        }>
+                          <XAxis dataKey="year" stroke="#5e849f" fontSize={8} />
+                          <YAxis stroke="#5e849f" fontSize={8} />
+                          <Tooltip contentStyle={{ background: '#081226', borderColor: '#bd00ff' }} />
+                          <Legend fontSize={8} />
+                          <Bar dataKey="Без ремонта" fill="#ff073a" radius={[3, 3, 0, 0]} />
+                          <Bar dataKey="С ремонтом" fill="#39ff14" radius={[3, 3, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-center text-muted py-5" style={{ fontSize: '11px' }}>
+                    Расчет окупаемости инвестиций (ROI)...
                   </div>
-                  <div className="grid-stat-box">
-                    <span className="grid-stat-label">Экономия в сезон</span>
-                    <span className="grid-stat-val text-neon-green">
-                      {selectedBuildingData.metrics.yearly_saving_kzt.toLocaleString()} ₸
-                    </span>
-                  </div>
-                </div>
-                
-                {/* ROI Amortization curve chart */}
-                <div className="chart-box">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={
-                      selectedBuildingData.chart_data.years.map((y, idx) => ({
-                        year: y,
-                        'Без ремонта': selectedBuildingData.chart_data.without_renovation_accumulated_kzt[idx],
-                        'С ремонтом': selectedBuildingData.chart_data.with_renovation_accumulated_kzt[idx]
-                      }))
-                    }>
-                      <XAxis dataKey="year" stroke="#5e849f" fontSize={8} />
-                      <YAxis stroke="#5e849f" fontSize={8} />
-                      <Tooltip contentStyle={{ background: '#081226', borderColor: '#bd00ff' }} />
-                      <Legend fontSize={8} />
-                      <Bar dataKey="Без ремонта" fill="#ff073a" radius={[3, 3, 0, 0]} />
-                      <Bar dataKey="С ремонтом" fill="#39ff14" radius={[3, 3, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
+                )}
               </div>
             </div>
           )}

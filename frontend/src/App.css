@@ -58,6 +58,14 @@ body {
   position: relative;
 }
 
+.app-content {
+  display: flex;
+  flex: 1;
+  flex-direction: row;
+  overflow: hidden;
+  position: relative;
+}
+
 /* Industrial HUD Header */
 .app-header {
   height: 55px;
@@ -455,8 +463,84 @@ body {
   letter-spacing: 1px;
 }
 
+.zoom-warning-hud {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(10, 12, 15, 0.85);
+  border: 1px solid var(--color-red);
+  color: var(--color-red);
+  padding: 12px 24px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: bold;
+  letter-spacing: 1px;
+  z-index: 10;
+  box-shadow: 0 0 15px rgba(255, 51, 51, 0.25);
+  pointer-events: none;
+}
+
 .system-status-value.norm {
   color: var(--color-green);
+}
+
+.passport-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  padding: 40px 20px;
+  text-align: center;
+  font-family: var(--font-mono);
+  border: 1px dashed var(--border-orange);
+  margin: 15px;
+  background: rgba(18, 21, 28, 0.5);
+  position: relative;
+  overflow: hidden;
+}
+
+.empty-state-title {
+  color: var(--color-orange);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  margin-top: 15px;
+  margin-bottom: 6px;
+}
+
+.empty-state-subtitle {
+  color: var(--text-muted);
+  font-size: 9px;
+  letter-spacing: 1px;
+}
+
+.empty-state-scanner {
+  width: 36px;
+  height: 36px;
+  border: 2px solid var(--color-orange);
+  border-radius: 50% !important;
+  position: relative;
+  animation: scan-pulse 2s infinite linear;
+}
+
+@keyframes scan-pulse {
+  0% {
+    transform: scale(0.8);
+    opacity: 0.5;
+    box-shadow: 0 0 0 0 rgba(255, 115, 0, 0.4);
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 1;
+    box-shadow: 0 0 10px 4px rgba(255, 115, 0, 0.2);
+  }
+  100% {
+    transform: scale(0.8);
+    opacity: 0.5;
+    box-shadow: 0 0 0 0 rgba(255, 115, 0, 0.4);
+  }
 }
 
 .system-status-value.anom {

@@ -51,6 +51,25 @@ export default function MapComponent({
   const mapContainer = useRef(null);
   const map = useRef(null);
 
+  // Keep refs up-to-date to prevent stale closures in MapLibre event handlers
+  const geoJSONRef = useRef(geoJSONData);
+  const activeBuildingIdRef = useRef(activeBuildingId);
+  const radiusActiveRef = useRef(radiusActive);
+  const onSelectBuildingRef = useRef(onSelectBuilding);
+  const onBoundsChangeRef = useRef(onBoundsChange);
+  const onViewportChangeRef = useRef(onViewportChange);
+  const onMapClickRef = useRef(onMapClick);
+
+  useEffect(() => {
+    geoJSONRef.current = geoJSONData;
+    activeBuildingIdRef.current = activeBuildingId;
+    radiusActiveRef.current = radiusActive;
+    onSelectBuildingRef.current = onSelectBuilding;
+    onBoundsChangeRef.current = onBoundsChange;
+    onViewportChangeRef.current = onViewportChange;
+    onMapClickRef.current = onMapClick;
+  });
+
   // 1. Initialize Map
   useEffect(() => {
     if (map.current) return;
@@ -68,7 +87,7 @@ export default function MapComponent({
       // Add buildings source
       map.current.addSource('buildings', {
         type: 'geojson',
-        data: geoJSONData || { type: 'FeatureCollection', features: [] }
+        data: geoJSONRef.current || { type: 'FeatureCollection', features: [] }
       });
 
       // Add 3D Extrusion Layer
@@ -103,7 +122,20 @@ export default function MapComponent({
           'fill-extrusion-color': '#ffb366', // Solid light orange
           'fill-extrusion-opacity': 0.95
         },
-        filter: ['==', ['get', 'id'], activeBuildingId || '']
+        filter: ['==', ['get', 'id'], activeBuildingIdRef.current || '']
+      });
+
+      // Add selected building outline layer (Neon Cyan glowing outline)
+      map.current.addLayer({
+        id: 'buildings-selected-outline',
+        type: 'line',
+        source: 'buildings',
+        paint: {
+          'line-color': '#00ffff', // Neon Cyan
+          'line-width': 3.5,
+          'line-blur': 0.5
+        },
+        filter: ['==', ['get', 'id'], activeBuildingIdRef.current || '']
       });
 
       // Add radius search circle layer & source
@@ -135,47 +167,61 @@ export default function MapComponent({
       // Handle map updates
       map.current.on('move', () => {
         const center = map.current.getCenter();
-        onViewportChange({
-          latitude: center.lat,
-          longitude: center.lng,
-          zoom: map.current.getZoom(),
-          pitch: map.current.getPitch(),
-          bearing: map.current.getBearing()
-        });
+        if (onViewportChangeRef.current) {
+          onViewportChangeRef.current({
+            latitude: center.lat,
+            longitude: center.lng,
+            zoom: map.current.getZoom(),
+            pitch: map.current.getPitch(),
+            bearing: map.current.getBearing()
+          });
+        }
       });
 
-      map.current.on('idle', () => {
-        const boundsObj = map.current.getBounds();
-        onBoundsChange({
-          west: boundsObj.getWest(),
-          south: boundsObj.getSouth(),
-          east: boundsObj.getEast(),
-          north: boundsObj.getNorth()
-        });
+      map.current.on('moveend', () => {
+        const zoom = map.current.getZoom();
+        if (zoom < 14) {
+          if (onBoundsChangeRef.current) {
+            onBoundsChangeRef.current(null);
+          }
+          if (map.current.getSource('buildings')) {
+            map.current.getSource('buildings').setData({ type: 'FeatureCollection', features: [] });
+          }
+        } else {
+          const boundsObj = map.current.getBounds();
+          if (onBoundsChangeRef.current) {
+            onBoundsChangeRef.current({
+              west: boundsObj.getWest(),
+              south: boundsObj.getSouth(),
+              east: boundsObj.getEast(),
+              north: boundsObj.getNorth()
+            });
+          }
+        }
       });
 
       // Selection clicks
       map.current.on('click', 'buildings-3d', (e) => {
-        if (radiusActive) return; // Let map click handle radius
+        if (radiusActiveRef.current) return; // Let map click handle radius
         const feature = e.features[0];
-        if (feature && feature.properties?.id) {
-          onSelectBuilding(feature.properties.id);
+        if (feature && feature.properties?.id && onSelectBuildingRef.current) {
+          onSelectBuildingRef.current(feature.properties.id);
         }
       });
 
       // Generic map click for radial search
       map.current.on('click', (e) => {
-        if (radiusActive) {
-          onMapClick({ lngLat: e.lngLat });
+        if (radiusActiveRef.current && onMapClickRef.current) {
+          onMapClickRef.current({ lngLat: e.lngLat });
         }
       });
 
       // cursor styles
       map.current.on('mouseenter', 'buildings-3d', () => {
-        if (!radiusActive) map.current.getCanvas().style.cursor = 'pointer';
+        if (!radiusActiveRef.current) map.current.getCanvas().style.cursor = 'pointer';
       });
       map.current.on('mouseleave', 'buildings-3d', () => {
-        if (!radiusActive) map.current.getCanvas().style.cursor = '';
+        if (!radiusActiveRef.current) map.current.getCanvas().style.cursor = '';
       });
     });
   }, []);
@@ -189,8 +235,13 @@ export default function MapComponent({
 
   // Update selection highlight
   useEffect(() => {
-    if (map.current && map.current.getLayer('buildings-selected')) {
-      map.current.setFilter('buildings-selected', ['==', ['get', 'id'], activeBuildingId || '']);
+    if (map.current) {
+      if (map.current.getLayer('buildings-selected')) {
+        map.current.setFilter('buildings-selected', ['==', ['get', 'id'], activeBuildingId || '']);
+      }
+      if (map.current.getLayer('buildings-selected-outline')) {
+        map.current.setFilter('buildings-selected-outline', ['==', ['get', 'id'], activeBuildingId || '']);
+      }
     }
   }, [activeBuildingId]);
 

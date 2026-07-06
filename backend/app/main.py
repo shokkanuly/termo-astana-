@@ -1,5 +1,6 @@
 import json
 import time
+import asyncio
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -14,6 +15,8 @@ from app.database import get_db, init_db
 from app.osm_ingest import ingest_data
 from app.weather import get_astana_weather
 from app.ml_anomaly import detect_anomaly
+from app.weather_worker import weather_polling_worker
+from app.websocket_server import websocket_streamer
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -35,6 +38,10 @@ async def lifespan(app: FastAPI):
             print(f"Database contains {count} buildings. Skipping ingestion.")
     except Exception as e:
         print(f"Failed to check/ingest buildings: {e}")
+        
+    # 3. Start background simulation workers
+    asyncio.create_task(weather_polling_worker())
+    asyncio.create_task(websocket_streamer())
         
     yield
 
@@ -80,12 +87,23 @@ def get_buildings_geojson(
     min_lon: Optional[float] = Query(None),
     min_lat: Optional[float] = Query(None),
     max_lon: Optional[float] = Query(None),
-    max_lat: Optional[float] = Query(None)
+    max_lat: Optional[float] = Query(None),
+    min_lng: Optional[float] = Query(None),
+    max_lng: Optional[float] = Query(None)
 ):
     """
     Returns buildings in GeoJSON FeatureCollection format.
-    Filters using PostGIS ST_MakeEnvelope (&& operator) for spatial indexing if bounds are provided.
+    Filters using PostGIS ST_MakeEnvelope & ST_Intersects with a maximum limit of 2000 features to prevent OOM/payload bloat.
     """
+    actual_min_lon = min_lon if min_lon is not None else min_lng
+    actual_max_lon = max_lon if max_lon is not None else max_lng
+
+    if None in (actual_min_lon, min_lat, actual_max_lon, max_lat):
+        return {
+            "type": "FeatureCollection",
+            "features": []
+        }
+
     weather = get_astana_weather()
     temp_out = weather["temp_out"]
     
@@ -94,13 +112,14 @@ def get_buildings_geojson(
                facade_area_m2, roof_area_m2, window_area_m2,
                ST_AsGeoJSON(geom) as geojson
         FROM buildings
+        WHERE geom && ST_MakeEnvelope(%s, %s, %s, %s, 4326)
+          AND ST_Intersects(geom, ST_MakeEnvelope(%s, %s, %s, %s, 4326))
+        LIMIT 2000
     """
-    params = []
-    
-    # Apply bounding box filter if all coordinates are provided
-    if None not in (min_lon, min_lat, max_lon, max_lat):
-        query += " WHERE geom && ST_MakeEnvelope(%s, %s, %s, %s, 4326)"
-        params = [min_lon, min_lat, max_lon, max_lat]
+    params = [
+        actual_min_lon, min_lat, actual_max_lon, max_lat,
+        actual_min_lon, min_lat, actual_max_lon, max_lat
+    ]
         
     features = []
     try:
