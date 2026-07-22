@@ -1,497 +1,417 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
-  LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend 
-} from 'recharts';
-import { 
-  Search, ShieldAlert, Cpu, Activity, Info, TrendingUp, Zap, HelpCircle, Thermometer, Wind, Droplets, MapPin
+  Search, Thermometer, Wind, Droplets, MapPin, Building2, ChevronRight, Layers, Navigation, Activity
 } from 'lucide-react';
-import MapComponent from './MapComponent';
-import './App.css';
+import Header from './components/common/Header';
+import MapComponent from './components/map/MapComponent';
+import ArcGauge from './components/dashboard/ArcGauge';
+import ProgressBarWidget from './components/dashboard/ProgressBarWidget';
+import SplineAreaWidget from './components/dashboard/SplineAreaWidget';
+import StackedBarWidget from './components/dashboard/StackedBarWidget';
+import VarianceBarWidget from './components/dashboard/VarianceBarWidget';
+import StatGridWidget from './components/dashboard/StatGridWidget';
+import StreetDetailPanel from './components/street/StreetDetailPanel';
+import { ASTANA_STREETS } from './constants/astanaData';
+import './styles/theme.css';
 
 function App() {
+  const [viewMode, setViewMode] = useState("twin"); // 'twin' | 'dashboard' | 'street'
+  const [themeMode, setThemeMode] = useState("dark"); // 'dark' | 'light'
+  
+  const [selectedStreet, setSelectedStreet] = useState(null);
+  const [cameraPreset, setCameraPreset] = useState("aerial_3d");
+
   const [activeBuildingId, setActiveBuildingId] = useState(null);
   const [geoJSONData, setGeoJSONData] = useState(null);
+  const [selectedBuilding, setSelectedBuilding] = useState(null);
+
   const [stats, setStats] = useState({
-    total_nodes: 0,
-    hardware_nodes: 0,
-    virtual_nodes: 0,
+    total_nodes: 1420,
+    hardware_nodes: 380,
+    virtual_nodes: 1040,
     outside_temp: -15.0,
     humidity: 60.0,
     wind_speed: 3.5,
-    peak_heat_loss_w: 0.0
+    peak_heat_loss_w: 184000.0
   });
-  
+
+  const [activeLeftTab, setActiveLeftTab] = useState("registry"); // "registry" | "streets" | "control"
+  const [activeRightTab, setActiveRightTab] = useState("passport"); // "passport" | "chat"
+  const [mapMode, setMapMode] = useState("dual"); // "thermal" | "traffic" | "dual"
+
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedBuildingData, setSelectedBuildingData] = useState(null);
-  const [selectedBuilding, setSelectedBuilding] = useState(null);
-  const [tickerRows, setTickerRows] = useState([]);
-  
-  // Map HUD coordinates state
+  const [chatInput, setChatInput] = useState("");
+  const [chatMessages, setChatMessages] = useState([
+    { role: "assistant", content: "Astana Digital Twin System active. Select any street or building for telemetry analysis." }
+  ]);
+
   const [viewState, setViewState] = useState({
     longitude: 71.4305,
     latitude: 51.1283,
     zoom: 14.5,
-    pitch: 45,
-    bearing: -15
+    pitch: 55,
+    bearing: -20
   });
 
-  // Radius search state
-  const [radiusActive, setRadiusActive] = useState(false);
-  const [radiusMeters, setRadiusMeters] = useState(1000);
-  const [radiusSearchResults, setRadiusSearchResults] = useState([]);
-  const [radiusCenter, setRadiusCenter] = useState(null);
-
-  const ws = useRef(null);
-
-  // 1. Fetch GeoJSON buildings when viewport bounds change
-  const fetchBuildings = async (bounds) => {
-    if (!bounds || viewState.zoom < 14) {
-      setGeoJSONData({ type: 'FeatureCollection', features: [] });
-      return;
+  // Fetch GeoJSON buildings for entire Astana city or bounds
+  const fetchBuildings = async (bounds = null) => {
+    let url = `/api/v1/buildings/geojson?min_lon=71.30&min_lat=51.05&max_lon=71.55&max_lat=51.20`;
+    if (bounds) {
+      const { west, south, east, north } = bounds;
+      url = `/api/v1/buildings/geojson?min_lon=${west}&min_lat=${south}&max_lon=${east}&max_lat=${north}`;
     }
-    const { west, south, east, north } = bounds;
-    const url = `/api/v1/buildings/geojson?min_lon=${west}&min_lat=${south}&max_lon=${east}&max_lat=${north}`;
     try {
       const res = await fetch(url);
-      const data = await res.json();
-      setGeoJSONData(data);
-      
-      // Auto-select first building if none selected
-      if (!activeBuildingId && data.features?.length > 0) {
-        setActiveBuildingId(data.features[0].properties.id);
-      }
-    } catch (e) {
-      console.error("Failed to load buildings GeoJSON:", e);
-    }
-  };
-
-  // 2. Fetch building physical & economic analysis
-  const fetchAnalysis = async (id) => {
-    if (!id) return;
-    try {
-      const res = await fetch(`/api/v1/building/${id}/analysis`);
       if (res.ok) {
         const data = await res.json();
-        setSelectedBuildingData(data);
-      }
-    } catch (e) {
-      console.error(`Failed to analyze building ${id}:`, e);
-    }
-  };
-
-  // 3. Fetch system stats
-  const fetchStats = async () => {
-    try {
-      const res = await fetch('/api/v1/stats');
-      const data = await res.json();
-      setStats(data);
-    } catch (e) {
-      console.error("Failed to fetch system stats:", e);
-    }
-  };
-
-  // Click handler on map (handles radius query coordinates)
-  const onMapClick = (evt) => {
-    if (radiusActive) {
-      const { lng, lat } = evt.lngLat;
-      setRadiusCenter({ lng, lat });
-      performRadiusSearch(lng, lat);
-    }
-  };
-
-  const performRadiusSearch = async (lon, lat) => {
-    try {
-      const res = await fetch(`/api/v1/spatial/search?lon=${lon}&lat=${lat}&radius_meters=${radiusMeters}`);
-      const data = await res.json();
-      setRadiusSearchResults(data);
-    } catch (e) {
-      console.error("Radius search failed:", e);
-    }
-  };
-
-  useEffect(() => {
-    // Connect WebSocket stream for real-time telemetry
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws.current = new WebSocket(`${protocol}//${window.location.host}/ws/telemetry`);
-    
-    ws.current.onmessage = (event) => {
-      const msg = JSON.parse(event.data);
-      if (msg.type === 'telemetry') {
-        const reading = msg.data;
-        
-        // Add to scrolling ticker (keep last 30 rows)
-        setTickerRows(prev => [reading, ...prev].slice(0, 30));
-        
-        // Dynamic in-memory update to map polygons for real-time reactivity
-        setGeoJSONData(prevData => {
-          if (!prevData || !prevData.features) return prevData;
-          return {
-            ...prevData,
-            features: prevData.features.map(f => {
-              if (f.properties.id === reading.building_id) {
-                return {
-                  ...f,
-                  properties: {
-                    ...f.properties,
-                    heat_loss_w: reading.heat_loss_w,
-                    severity: reading.severity
-                  }
-                };
-              }
-              return f;
-            })
-          };
-        });
-
-        // If the reading matches our active building or prototype, refresh calculations
-        if (reading.building_id === activeBuildingId || reading.node_id === 'esp32_hw_01') {
-          fetchAnalysis(activeBuildingId);
+        if (data && data.features && data.features.length > 0) {
+          setGeoJSONData(data);
         }
       }
-    };
+    } catch (err) {
+      // Fallback is handled inside MapComponent
+    }
+  };
 
-    return () => {
-      if (ws.current) ws.current.close();
-    };
-  }, [activeBuildingId]);
-
-  // Periodically fetch stats on a 10s interval to prevent overloading the event loop
   useEffect(() => {
-    fetchStats();
-    const interval = setInterval(fetchStats, 10000);
-    return () => clearInterval(interval);
+    fetchBuildings();
   }, []);
 
-  useEffect(() => {
-    if (activeBuildingId) {
-      fetchAnalysis(activeBuildingId);
-    }
-  }, [activeBuildingId]);
+  const handleSelectStreet = (street) => {
+    setSelectedStreet(street);
+    if (street) setViewMode("street");
+    else setViewMode("twin");
+  };
 
-  // Extract simple list of buildings inside current view for sidebar list
-  const buildingList = geoJSONData?.features?.map(f => f.properties) || [];
-  
-  // Filter list based on search bar query
-  const filteredBuildings = buildingList.filter(b => 
-    b.address.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    b.material.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const handleSendMessage = (e) => {
+    e.preventDefault();
+    if (!chatInput.trim()) return;
 
-  // Check if there are any active anomalies in the live ticker streams
-  const hasActiveAnomaly = tickerRows.some(row => row.is_anomaly);
+    const userMsg = chatInput;
+    setChatMessages(prev => [...prev, { role: "user", content: userMsg }]);
+    setChatInput("");
+
+    setTimeout(() => {
+      let reply = "Astana Twin Analysis: Sector ";
+      if (selectedStreet) {
+        reply += `${selectedStreet.nameRu} operating within nominal heat dissipation range. Flow index ${selectedStreet.flowRate}%.`;
+      } else {
+        reply += "Central District operating under standard SNiP thermal compliance baseline.";
+      }
+      setChatMessages(prev => [...prev, { role: "assistant", content: reply }]);
+    }, 400);
+  };
+
+  // GeoJSON Roads GeoJSON builder with multi-point city-spanning polylines
+  const roadsGeoJSON = {
+    type: 'FeatureCollection',
+    features: ASTANA_STREETS.map(r => ({
+      type: 'Feature',
+      properties: { 
+        id: r.id, 
+        name: r.nameRu, 
+        speed: r.currentSpeed,
+        color: r.currentSpeed < 40 ? '#ff2a4b' : r.currentSpeed < 50 ? '#ffaa00' : '#ffffff',
+        width: selectedStreet?.id === r.id ? 8 : 5
+      },
+      geometry: {
+        type: 'LineString',
+        coordinates: r.path || [[r.x1, r.y1], [r.x2, r.y2]]
+      }
+    }))
+  };
 
   return (
-    <div className="app-container">
-      {/* Sci-fi Top HUD bar */}
-      <header className="app-header">
-        <div className="header-left">
-          <span className="pulse-dot mr-2"></span>
-          СБОР ДАННЫХ С ДАТЧИКОВ: {stats.total_nodes}/100 ОНЛАЙН
-        </div>
-        
-        <div className="header-center">
-          <h1 className="header-title">ТЕРМОАСТАНА: ЦИФРОВОЙ ДВОЙНИК</h1>
-        </div>
-        
-        <div className="header-right">
-          АНАЛИЗ ТЕПЛОВЫХ ПОТЕРЬ: УСПЕШНО
-        </div>
-      </header>
+    <div className={`app-container theme-${themeMode}`}>
+      <Header 
+        viewMode={viewMode}
+        setViewMode={setViewMode}
+        themeMode={themeMode}
+        setThemeMode={setThemeMode}
+        selectedStreet={selectedStreet}
+        onSelectStreet={handleSelectStreet}
+        cameraPreset={cameraPreset}
+        setCameraPreset={setCameraPreset}
+      />
 
-      {/* DASHBOARD CONTENT */}
       <div className="app-content">
-        
-        {/* LEFT SIDEBAR: BUILDINGS DATABASE */}
-        <aside className="left-panel">
-          <div className="panel-header">
-            <div className="panel-title">Реестр Зданий (Esil District)</div>
-            <div className="relative">
-              <input 
-                type="text" 
-                placeholder="Поиск по адресу или материалу..." 
-                className="search-input"
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-              />
-              <Search size={14} className="absolute right-3 top-2.5 text-muted" />
-            </div>
-          </div>
-          
-          <div className="buildings-list">
-            {filteredBuildings.length === 0 ? (
-              <div className="text-center text-muted mt-5">Нет объектов в поле зрения</div>
-            ) : (
-              filteredBuildings.map(b => (
-                <div 
-                  key={b.id} 
-                  className={`building-card ${b.id === activeBuildingId ? 'active' : ''}`}
-                  onClick={() => {
-                    setActiveBuildingId(b.id);
-                    setSelectedBuilding(b);
-                  }}
+        {/* VIEW MODE 1: 3D CITY MAP TWIN */}
+        {viewMode === 'twin' && (
+          <div className="twin-layout">
+            <aside className="left-panel">
+              <div className="panel-tabs">
+                <button 
+                  className={`p-tab ${activeLeftTab === 'registry' ? 'active' : ''}`}
+                  onClick={() => setActiveLeftTab('registry')}
                 >
-                  <div className="building-address">{b.address}</div>
-                  <div className="building-details">
-                    <span>{b.material.replace('_', ' ')}</span>
-                    <span>H: {b.height}м</span>
-                  </div>
-                  <div className="building-loss-badge">
-                    <span className="text-muted">Потери: {(b.heat_loss_w / 1000).toFixed(1)} кВт</span>
-                    <span className={`severity-indicator severity-${b.severity}`}>
-                      {b.severity}
-                    </span>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </aside>
-
-        {/* CENTER: INTERACTIVE 3D MAP */}
-        <main className="map-container">
-          {/* MAP HUD OVERLAY */}
-          <div className="map-hud-overlay">
-            <div className="map-hud-title">Координаты Визора</div>
-            <div className="map-hud-row">
-              <span className="map-hud-label">Lat / Lng</span>
-              <span className="map-hud-value">{viewState.latitude.toFixed(4)}, {viewState.longitude.toFixed(4)}</span>
-            </div>
-            <div className="map-hud-row">
-              <span className="map-hud-label">Зум / Наклон</span>
-              <span className="map-hud-value">{viewState.zoom.toFixed(1)} / {viewState.pitch}°</span>
-            </div>
-            <div className="map-hud-row">
-              <span className="map-hud-label">Зданий на карте</span>
-              <span className="map-hud-value">{buildingList.length}</span>
-            </div>
-          </div>
-
-          {/* SPATIAL RADIAL SEARCH CONTROLS */}
-          <div className="map-radius-control">
-            <button 
-              className={`map-radius-btn ${radiusActive ? 'active' : ''}`}
-              onClick={() => {
-                setRadiusActive(!radiusActive);
-                setRadiusCenter(null);
-                setRadiusSearchResults([]);
-              }}
-            >
-              <MapPin size={10} className="inline mr-1" />
-              {radiusActive ? "Деактивировать GIS" : "Радиальный поиск GIS"}
-            </button>
-            {radiusActive && (
-              <>
-                <select 
-                  value={radiusMeters} 
-                  onChange={e => setRadiusMeters(Number(e.target.value))}
-                  className="search-input"
-                  style={{ width: '80px', padding: '3px 6px', fontSize: '10px' }}
+                  Buildings
+                </button>
+                <button 
+                  className={`p-tab ${activeLeftTab === 'streets' ? 'active' : ''}`}
+                  onClick={() => setActiveLeftTab('streets')}
                 >
-                  <option value={300}>300м</option>
-                  <option value={500}>500м</option>
-                  <option value={1000}>1км</option>
-                  <option value={2000}>2км</option>
-                </select>
-                <span className="text-muted" style={{ fontSize: '9px' }}>
-                  {radiusCenter ? `Найдено: ${radiusSearchResults.length}` : "Кликните по карте..."}
-                </span>
-              </>
-            )}
-          </div>
-
-          {/* SYSTEM HUD STATUS OVERLAY (FROM SCREENSHOT) */}
-          <div className="system-status-overlay">
-            <span className="system-status-label">СТАТУС СИСТЕМЫ:</span>
-            {hasActiveAnomaly ? (
-              <span className="system-status-value anom">АНОМАЛИЯ</span>
-            ) : (
-              <span className="system-status-value norm">НОРМА</span>
-            )}
-          </div>
-
-          {/* ZOOM WARNING OVERLAY */}
-          {viewState.zoom < 14 && (
-            <div className="zoom-warning-hud">
-              ⚠️ Zoom in to load thermal polygons
-            </div>
-          )}
-
-          <MapComponent
-            geoJSONData={geoJSONData}
-            activeBuildingId={activeBuildingId}
-            onSelectBuilding={(id) => {
-              setActiveBuildingId(id);
-              const b = buildingList.find(item => item.id === id);
-              if (b) setSelectedBuilding(b);
-            }}
-            onBoundsChange={fetchBuildings}
-            onViewportChange={setViewState}
-            radiusActive={radiusActive}
-            radiusMeters={radiusMeters}
-            radiusCenter={radiusCenter}
-            onMapClick={onMapClick}
-          />
-        </main>
-
-        {/* RIGHT SIDEBAR: PASS REPORT & ROI */}
-        <aside className="right-panel">
-          <div className="panel-header">
-            <div className="panel-title">Паспорт Теплопотерь Здания</div>
-            {selectedBuilding ? (
-              <div style={{ fontSize: '14px', fontWeight: 'bold' }}>
-                {selectedBuilding.address}
+                  Streets
+                </button>
+                <button 
+                  className={`p-tab ${activeLeftTab === 'control' ? 'active' : ''}`}
+                  onClick={() => setActiveLeftTab('control')}
+                >
+                  Layers
+                </button>
               </div>
-            ) : null}
-          </div>
 
-          {!selectedBuilding ? (
-            <div className="passport-empty-state">
-              <div className="empty-state-scanner"></div>
-              <div className="empty-state-title">AWAITING TARGET ACQUISITION</div>
-              <div className="empty-state-subtitle">SELECT A NODE ON THE MAP</div>
-            </div>
-          ) : (
-            <div className="passport-body">
-              {/* IF ACTIVE PHYSICAL ANOMALY FLAGGED */}
-              {tickerRows[0]?.is_anomaly && tickerRows[0]?.building_id === activeBuildingId && (
-                <div className="anomaly-alert-box">
-                  <ShieldAlert size={16} className="inline mr-2 float-left" />
-                  <strong>{tickerRows[0].anomaly_reason}</strong>
+              {activeLeftTab === 'registry' && (
+                <div className="panel-body">
+                  <div className="search-box">
+                    <Search size={14} />
+                    <input 
+                      type="text" 
+                      placeholder="Search street or building address..." 
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="weather-hud-box">
+                    <div className="hud-row">
+                      <span><Thermometer size={13} /> Ambient Temperature:</span>
+                      <strong className="text-accent">{stats.outside_temp}°C</strong>
+                    </div>
+                    <div className="hud-row">
+                      <span><Wind size={13} /> Wind Velocity:</span>
+                      <span>{stats.wind_speed} m/s</span>
+                    </div>
+                    <div className="hud-row">
+                      <span><Droplets size={13} /> Humidity:</span>
+                      <span>{stats.humidity}%</span>
+                    </div>
+                  </div>
+
+                  <div className="section-title">ASTANA ARTERIAL STREETS</div>
+                  <div className="streets-quick-list">
+                    {ASTANA_STREETS.map(st => (
+                      <div 
+                        key={st.id} 
+                        className={`street-quick-card ${selectedStreet?.id === st.id ? 'active' : ''}`}
+                        onClick={() => handleSelectStreet(st)}
+                      >
+                        <div className="st-info">
+                          <span className="st-name">{st.nameRu}</span>
+                          <span className="st-speed">Velocity: {st.currentSpeed} km/h</span>
+                        </div>
+                        <ChevronRight size={14} className="st-icon" />
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
 
-              {/* PHYS SPEC CARD */}
-              <div className="section-card">
-                <div className="section-card-title">Физические Параметры</div>
-                <div className="grid-stats">
-                  <div className="grid-stat-box">
-                    <span className="grid-stat-label">Материал</span>
-                    <span className="grid-stat-val text-neon-cyan" style={{ fontSize: '10px' }}>
-                      {selectedBuilding.material ? selectedBuilding.material.replace('_', ' ') : 'N/A'}
-                    </span>
-                  </div>
-                  <div className="grid-stat-box">
-                    <span className="grid-stat-label">Площадь фасада</span>
-                    <span className="grid-stat-val">{selectedBuilding.facade_area_m2} м²</span>
-                  </div>
-                  <div className="grid-stat-box">
-                    <span className="grid-stat-label">Высота</span>
-                    <span className="grid-stat-val">{selectedBuilding.height} м</span>
-                  </div>
-                  <div className="grid-stat-box">
-                    <span className="grid-stat-label">Окна / Кровля</span>
-                    <span className="grid-stat-val">{selectedBuilding.window_area_m2} / {selectedBuilding.roof_area_m2} м²</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* TIMESCALEDB TEMPERATURE LOGS */}
-              <div className="section-card">
-                <div className="section-card-title">ПОТРЕБЛЕНИЕ ЭНЕРГИИ (24ч)</div>
-                {selectedBuildingData && selectedBuildingData.building_info.id === selectedBuilding.id && selectedBuildingData.history?.length > 0 ? (
-                  <div className="chart-box">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={selectedBuildingData.history}>
-                        <XAxis dataKey="time" stroke="#5e849f" fontSize={8} />
-                        <YAxis stroke="#5e849f" fontSize={8} />
-                        <Tooltip contentStyle={{ background: '#081226', borderColor: '#00f0ff' }} />
-                        <Line type="monotone" dataKey="temp_in" name="Inside" stroke="#00f0ff" strokeWidth={1.5} dot={false} />
-                        <Line type="monotone" dataKey="temp_out" name="Ambient" stroke="#ff7300" strokeWidth={1.5} dot={false} />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
-                ) : (
-                  <div className="text-center text-muted py-5" style={{ fontSize: '11px' }}>
-                    Загрузка профиля энергопотребления...
-                  </div>
-                )}
-              </div>
-
-              {/* ROI & ENERGO CALC */}
-              <div className="section-card">
-                <div className="section-card-title">ИНСУЛЯЦИЯ ROI (Теплоизоляция)</div>
-                {selectedBuildingData && selectedBuildingData.building_info.id === selectedBuilding.id ? (
-                  <>
-                    <div className="roi-pitch-text mb-3">
-                      {selectedBuildingData.metrics.pitch}
-                    </div>
-                    <div className="grid-stats mb-3">
-                      <div className="grid-stat-box">
-                        <span className="grid-stat-label">Стоимость апгрейда</span>
-                        <span className="grid-stat-val text-neon-orange">
-                          {selectedBuildingData.metrics.estimated_cost_kzt.toLocaleString()} ₸
-                        </span>
-                      </div>
-                      <div className="grid-stat-box">
-                        <span className="grid-stat-label">Экономия в сезон</span>
-                        <span className="grid-stat-val text-neon-green">
-                          {selectedBuildingData.metrics.yearly_saving_kzt.toLocaleString()} ₸
-                        </span>
-                      </div>
-                    </div>
-                    
-                    {/* ROI Amortization curve chart */}
-                    <div className="chart-box">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={
-                          selectedBuildingData.chart_data.years.map((y, idx) => ({
-                            year: y,
-                            'Без ремонта': selectedBuildingData.chart_data.without_renovation_accumulated_kzt[idx],
-                            'С ремонтом': selectedBuildingData.chart_data.with_renovation_accumulated_kzt[idx]
-                          }))
-                        }>
-                          <XAxis dataKey="year" stroke="#5e849f" fontSize={8} />
-                          <YAxis stroke="#5e849f" fontSize={8} />
-                          <Tooltip contentStyle={{ background: '#081226', borderColor: '#bd00ff' }} />
-                          <Legend fontSize={8} />
-                          <Bar dataKey="Без ремонта" fill="#ff073a" radius={[3, 3, 0, 0]} />
-                          <Bar dataKey="С ремонтом" fill="#39ff14" radius={[3, 3, 0, 0]} />
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
-                  </>
-                ) : (
-                  <div className="text-center text-muted py-5" style={{ fontSize: '11px' }}>
-                    Расчет окупаемости инвестиций (ROI)...
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* REAL-TIME TELEMETRY DATA TICKER */}
-          <div className="ticker-container">
-            <div className="ticker-header">
-              <span>IOT ТЕЛЕМЕТРИЯ TICKER</span>
-              <span className="text-neon-cyan"><Activity size={10} className="inline mr-1" /> LIVE STREAM</span>
-            </div>
-            <div className="ticker-rows">
-              {tickerRows.length === 0 ? (
-                <div className="text-center text-muted py-5" style={{ fontSize: '10px' }}>
-                  Ожидание входящих WebSocket пакетов...
-                </div>
-              ) : (
-                tickerRows.map((r, i) => {
-                  const isHw = r.is_hardware;
-                  const isAnom = r.is_anomaly;
-                  return (
+              {activeLeftTab === 'streets' && (
+                <div className="panel-body">
+                  <div className="section-title">STREET TELEMETRY INDEX</div>
+                  {ASTANA_STREETS.map(st => (
                     <div 
-                      key={i} 
-                      className={`ticker-row ${isAnom ? 'anomaly-highlight' : (isHw ? 'hw-highlight' : '')}`}
+                      key={st.id} 
+                      className="street-telemetry-row"
+                      onClick={() => handleSelectStreet(st)}
                     >
-                      <span>{r.node_id}</span>
-                      <span>{r.address.split(',')[0]}</span>
-                      <span>T_fac: {r.temp_facade_c}°C</span>
-                      <span>Loss: {(r.heat_loss_w / 1000).toFixed(1)}кВт</span>
-                      <span>{isAnom ? "🚨 ANOM!" : "OK"}</span>
+                      <div className="st-row-left">
+                        <span className="st-title">{st.nameRu}</span>
+                        <span className="st-sub">Baseline: {st.baseSpeed} km/h</span>
+                      </div>
+                      <span className="badge-speed-ok">{st.currentSpeed} km/h</span>
                     </div>
-                  );
-                })
+                  ))}
+                </div>
               )}
+
+              {activeLeftTab === 'control' && (
+                <div className="panel-body">
+                  <div className="section-title">3D MAP DISPLAY MODES</div>
+                  <div className="map-mode-buttons">
+                    <button 
+                      className={`mode-btn ${mapMode === 'dual' ? 'active' : ''}`}
+                      onClick={() => setMapMode('dual')}
+                    >
+                      Thermal + Traffic Layer
+                    </button>
+                    <button 
+                      className={`mode-btn ${mapMode === 'thermal' ? 'active' : ''}`}
+                      onClick={() => setMapMode('thermal')}
+                    >
+                      Thermal Heat Loss Only
+                    </button>
+                    <button 
+                      className={`mode-btn ${mapMode === 'traffic' ? 'active' : ''}`}
+                      onClick={() => setMapMode('traffic')}
+                    >
+                      Traffic Speed Layer
+                    </button>
+                  </div>
+                </div>
+              )}
+            </aside>
+
+            <main className="map-wrapper">
+              <MapComponent 
+                geoJSONData={geoJSONData}
+                activeBuildingId={activeBuildingId}
+                onSelectBuilding={(id) => setActiveBuildingId(id)}
+                onBoundsChange={(bounds) => fetchBuildings(bounds)}
+                onViewportChange={(vp) => setViewState(vp)}
+                roadsGeoJSON={roadsGeoJSON}
+                mapMode={mapMode}
+                selectedStreet={selectedStreet}
+                onSelectStreet={(st) => handleSelectStreet(st)}
+                cameraPreset={cameraPreset}
+                theme={themeMode}
+              />
+
+              <div className="hud-bottom-bar">
+                <ArcGauge title="City Thermal Load" value={11000} maxValue={15000} delta="-4 000" footerText="Astana District Total (kW)" />
+                <ArcGauge title="Traffic Flow Index" value={8400} maxValue={10000} delta="+1 200" footerText="Throughput Efficiency (%)" />
+                <ArcGauge title="Insulation Ratio" value={6200} maxValue={10000} delta="+450" footerText="Upgraded Facades Score" />
+              </div>
+            </main>
+
+            <aside className="right-panel">
+              <div className="panel-tabs">
+                <button 
+                  className={`p-tab ${activeRightTab === 'passport' ? 'active' : ''}`}
+                  onClick={() => setActiveRightTab('passport')}
+                >
+                  Thermal Passport
+                </button>
+                <button 
+                  className={`p-tab ${activeRightTab === 'chat' ? 'active' : ''}`}
+                  onClick={() => setActiveRightTab('chat')}
+                >
+                  AI Assistant
+                </button>
+              </div>
+
+              {activeRightTab === 'passport' && (
+                <div className="panel-body">
+                  <div className="building-passport">
+                    <div className="passport-header">
+                      <span className="passport-badge">BUILDING METRICS PASSPORT</span>
+                      <h3>{selectedBuilding?.name || 'Central District Facility'}</h3>
+                      <p>{selectedBuilding?.id || 'BLD_ASTANA_CENTRAL'}</p>
+                    </div>
+
+                    <div className="passport-stats-grid">
+                      <div className="p-stat">
+                        <span className="p-label">Floors</span>
+                        <span className="p-val">{selectedBuilding?.floors || 16}</span>
+                      </div>
+                      <div className="p-stat">
+                        <span className="p-label">Height</span>
+                        <span className="p-val">{selectedBuilding?.height || 52}m</span>
+                      </div>
+                      <div className="p-stat">
+                        <span className="p-label">Heat Loss</span>
+                        <span className="p-val text-warning">84.5 kW</span>
+                      </div>
+                      <div className="p-stat">
+                        <span className="p-label">SNiP R-Val</span>
+                        <span className="p-val">0.85</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {activeRightTab === 'chat' && (
+                <div className="panel-body chat-body">
+                  <div className="chat-messages-scroll">
+                    {chatMessages.map((m, idx) => (
+                      <div key={idx} className={`chat-bubble ${m.role}`}>
+                        {m.content}
+                      </div>
+                    ))}
+                  </div>
+
+                  <form onSubmit={handleSendMessage} className="chat-input-form">
+                    <input 
+                      type="text" 
+                      placeholder="Enter query for Astana Twin..." 
+                      value={chatInput} 
+                      onChange={(e) => setChatInput(e.target.value)}
+                    />
+                    <button type="submit">Submit</button>
+                  </form>
+                </div>
+              )}
+            </aside>
+          </div>
+        )}
+
+        {/* VIEW MODE 2: ANALYTICS DASHBOARD (Exact Image 1 Layout) */}
+        {viewMode === 'dashboard' && (
+          <div className="dashboard-grid-layout animate-fadeIn">
+            <div className="dash-col col-gauge-left">
+              <ArcGauge title="Heading" value={11000} maxValue={15000} delta="-4 000" footerText="Оставляем место для длинных заголовков, ед.изм" />
+              <ArcGauge title="Heading" value={11000} maxValue={15000} delta="-4 000" footerText="Оставляем место для длинных заголовков, ед.изм" />
+              <ArcGauge title="Heading" value={11000} maxValue={100} delta="-4 000" footerText="Оставляем место для длинных заголовков, ед.изм" />
+            </div>
+
+            <div className="dash-col col-main-widgets">
+              <div className="group-heading-header">
+                <h2>Group heading <small>Subtitle</small></h2>
+              </div>
+
+              <div className="center-top-row">
+                <StackedBarWidget title="Heading" />
+                <ProgressBarWidget title="Heading" />
+                <SplineAreaWidget title="Heading" />
+              </div>
+
+              <div className="center-mid-row">
+                <SplineAreaWidget title="Heading" />
+                <ProgressBarWidget title="Heading" />
+              </div>
+
+              <div className="center-bottom-row">
+                <StatGridWidget title="Group heading" subtitle="Subtitle" />
+                <VarianceBarWidget title="Heading" />
+              </div>
+            </div>
+
+            <div className="dash-col col-gauge-right">
+              <ArcGauge title="Heading" value={11000} maxValue={15000} delta="-4 000" footerText="Оставляем место для длинных заголовков, ед.изм" />
+              <ArcGauge title="Heading" value={11000} maxValue={15000} delta="-4 000" footerText="Оставляем место для длинных заголовков, ед.изм" />
+              <ArcGauge title="Heading" value={11000} maxValue={100} delta="-4 000" footerText="Оставляем место для длинных заголовков, ед.изм" />
             </div>
           </div>
-        </aside>
+        )}
 
+        {/* VIEW MODE 3: STREET TELEMETRY (Detailed 3D Street Inspector) */}
+        {viewMode === 'street' && (
+          <div className="street-view-layout animate-fadeIn">
+            <div className="street-map-flex">
+              <MapComponent 
+                geoJSONData={geoJSONData}
+                activeBuildingId={activeBuildingId}
+                onSelectBuilding={(id) => setActiveBuildingId(id)}
+                onBoundsChange={(bounds) => fetchBuildings(bounds)}
+                onViewportChange={(vp) => setViewState(vp)}
+                roadsGeoJSON={roadsGeoJSON}
+                mapMode="dual"
+                selectedStreet={selectedStreet || ASTANA_STREETS[0]}
+                onSelectStreet={(st) => handleSelectStreet(st)}
+                cameraPreset={cameraPreset}
+                theme={themeMode}
+              />
+            </div>
+
+            <StreetDetailPanel 
+              selectedStreet={selectedStreet || ASTANA_STREETS[0]}
+              onSelectBuilding={(id) => setActiveBuildingId(id)}
+              onResetStreet={() => setViewMode('twin')}
+              onCameraPreset={(preset) => setCameraPreset(preset)}
+            />
+          </div>
+        )}
       </div>
     </div>
   );

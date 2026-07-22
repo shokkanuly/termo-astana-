@@ -121,5 +121,39 @@ def detect_anomaly(temp_in, temp_out, humidity, wind_speed, facade_area, materia
             
     return is_anomaly, reason, round(expected_loss_kw, 2)
 
+# ─────────────────────────────────────────────
+# TRAFFIC ANOMALY DETECTION (IsolationForest)
+# ─────────────────────────────────────────────
+from sklearn.ensemble import IsolationForest
+
+TRAFFIC_FEATURES = ["traffic_speed_kmh", "congestion_index", "air_quality_co2_ppm", "facade_heat_loss_w_m2", "ambient_temp_c"]
+
+print("Training IsolationForest traffic anomaly detector...")
+np.random.seed(42)
+_df_train = pd.DataFrame({
+    "traffic_speed_kmh":      np.random.normal(50.0, 4.0, 300),
+    "congestion_index":       np.random.normal(30.0, 4.0, 300),
+    "air_quality_co2_ppm":    np.random.normal(410.0, 20.0, 300),
+    "facade_heat_loss_w_m2":  np.random.normal(95.0,  8.0, 300),
+    "ambient_temp_c":         np.random.normal(30.0,  0.5, 300),
+})
+traffic_ml_model = IsolationForest(contamination=0.05, random_state=42, n_estimators=150)
+traffic_ml_model.fit(_df_train[TRAFFIC_FEATURES])
+print("IsolationForest traffic model ready.")
+
+def detect_traffic_anomaly(speed, congestion, co2, heat_loss, ambient_temp):
+    df_test = pd.DataFrame([{
+        "traffic_speed_kmh": speed,
+        "congestion_index": congestion,
+        "air_quality_co2_ppm": co2,
+        "facade_heat_loss_w_m2": heat_loss,
+        "ambient_temp_c": ambient_temp,
+    }])
+    prediction = traffic_ml_model.predict(df_test[TRAFFIC_FEATURES])[0]
+    anomaly_score = float(traffic_ml_model.score_samples(df_test[TRAFFIC_FEATURES])[0])
+    is_anomaly = bool(prediction == -1)
+    confidence = round(max(0, min(100, (0.5 - anomaly_score) * 450))) if is_anomaly else 0
+    return is_anomaly, anomaly_score, confidence
+
 if __name__ == "__main__":
     train_offline_model()
