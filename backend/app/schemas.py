@@ -1,126 +1,76 @@
+"""Request models for the API.
+
+These are the payload shapes accepted by the routers. Responses are returned as plain
+dicts rather than models, so there are no response schemas here.
+"""
+
+from typing import Optional
+
 from pydantic import BaseModel
-from typing import Dict, List, Optional
 
 
-class BuildingSummary(BaseModel):
-    id: str
-    address: str
-    district: str
-    year_built: int
-    material: str
-    material_preset: str
-    critical_loss_kw: float
-    monthly_waste_kzt: float
-    severity: str
-    priority_rank: int
+class HardwareTelemetry(BaseModel):
+    """ESP32 traffic node: ultrasonic distance + flow speed + relay load."""
+
+    node_id: str
+    temp_c: float
+    distance_cm: float
+    flow_speed_kmh: float
+    lane_blocked: bool
+    power_kw: float
 
 
-class HeatBreakdown(BaseModel):
-    walls_kw: float
-    roof_kw: float
-    windows_kw: float
+class TwinMetrics(BaseModel):
+    traffic_speed_kmh: float
+    congestion_index: float
+    air_quality_co2_ppm: float
+    facade_heat_loss_w_m2: float
+    ambient_temp_c: float
 
 
-class HeatLossResult(BaseModel):
-    total_kw: float
-    total_watts: float
-    breakdown: HeatBreakdown
-    delta_t: float
-    r_total: float
+class TwinTelemetry(BaseModel):
+    timestamp: str
+    district_id: str
+    metrics: TwinMetrics
+    ai_trigger: bool
 
 
-class RenovationMetrics(BaseModel):
-    current_critical_loss_kw: float
-    optimized_critical_loss_kw: float
-    loss_reduction_percent: float
-    monthly_waste_kzt: float
-    estimated_cost_kzt: float
-    yearly_saving_kzt: float
-    roi_months: float
-    roi_years: float
+class TelemetryPayload(BaseModel):
+    city: str
+    district_id: str
+    metrics: TwinMetrics
+
+
+class ThermoPayload(BaseModel):
+    building_id: str
+    name: str
+    age: int
+    current_loss_wm2: float
     insulation_type: str
-    pitch: str
+    target_thickness_mm: int
+    calculated_reduction_percent: int
 
 
-class ChartData(BaseModel):
-    years: List[str]
-    without_renovation_accumulated_kzt: List[float]
-    with_renovation_accumulated_kzt: List[float]
+class ChatRequest(BaseModel):
+    message: str
+    mode: str                          # 'traffic' | 'thermo'
+    session_id: str = "default"
+    context: dict = {}
 
 
-class AnalysisResponse(BaseModel):
-    building_info: dict
-    metrics: RenovationMetrics
-    chart_data: ChartData
-    thermal_matrix: List[float]
+class SmartControlRequest(BaseModel):
+    district_id: str = "nurzhol_sector_A"
+    mode: str = "AUTO"
+    metrics: Optional[TwinMetrics] = None
+    hardware: dict = {}
+    manual_action: Optional[str] = None
 
 
-class DistrictSummary(BaseModel):
-    district: str
-    building_count: int
-    total_monthly_waste_kzt: float
-    avg_critical_loss_kw: float
-    priority_score: float
-    top_building_address: str
+class ESP32Payload(BaseModel):
+    """ESP32 thermal node: indoor/outdoor probe pair plus window reed switch."""
 
-
-class SensorReading(BaseModel):
     node_id: str
-    district: str
-    address: str
-    temp_facade_c: float
-    temp_ambient_c: float
-    humidity_pct: float
-    heat_loss_w: float
-    severity: str
-    is_hardware: bool
-    timestamp: float
-
-
-class NodeStatus(BaseModel):
-    node_id: str
-    district: str
-    address: str
-    temp_facade_c: float
-    heat_loss_w: float
-    severity: str
-    is_hardware: bool
-    last_seen: float
-    map_x: Optional[float] = None
-    map_y: Optional[float] = None
-
-
-class MapBuilding(BaseModel):
-    id: str
-    address: str
-    district: str
-    sector: str
-    map_x: float
-    map_y: float
-    critical_loss_kw: float
-    monthly_waste_kzt: float
-    severity: str
-
-
-class MapDistrict(BaseModel):
-    district: str
-    label: str
-    subtitle: str
-    bank: str
-    path: str
-    label_x: float
-    label_y: float
-    sectors: list
-    total_monthly_waste_kzt: float
-    building_count: int
-    heat_intensity: float
-
-
-class CityMapResponse(BaseModel):
-    width: int
-    height: int
-    river_path: str
-    roads: List[str]
-    landmarks: list
-    districts: List[MapDistrict]
-    buildings: List[MapBuilding]
+    t_in: float
+    t_out: float
+    window_open: bool
+    humidity: Optional[float] = None

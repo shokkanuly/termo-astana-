@@ -40,3 +40,8 @@ __pycache__/
 *.njsproj
 *.sln
 *.sw?
+
+termo_astana.db-shm
+termo_astana.db-wal
+*.db-shm
+*.db-wal

@@ -9,6 +9,21 @@ SQLITE_PATH = os.getenv("SQLITE_PATH", "termo_astana.db")
 DB_BACKEND = "postgres"  # Will fallback to "sqlite" if postgres is offline
 _pool = None
 
+
+def is_sqlite() -> bool:
+    """True when running on the SQLite fallback.
+
+    Call this rather than importing DB_BACKEND: get_pool() can flip the value during
+    init_db(), so a name bound at module-import time would still read "postgres".
+    """
+    return DB_BACKEND == "sqlite"
+
+
+def placeholder() -> str:
+    """Parameter marker for the active backend."""
+    return "?" if DB_BACKEND == "sqlite" else "%s"
+
+
 def get_pool():
     global _pool, DB_BACKEND
     if DB_BACKEND == "sqlite":

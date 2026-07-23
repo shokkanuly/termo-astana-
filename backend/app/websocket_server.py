@@ -4,6 +4,7 @@ import random
 import math
 from app.weather_worker import GLOBAL_WEATHER
 from app.thermal_engine import calculate_baseline_heat_loss, load_simulation_buildings
+from app.state import manager
 
 def severity_from_w(w: float) -> str:
     if w >= 200000:
@@ -44,10 +45,7 @@ async def websocket_streamer():
                     baselines[b["building_id"]] = baseline
                 cached_t_out = t_out
             
-            # Retrieve clients dynamically to avoid circular import issues
-            from app.main import WS_CLIENTS, NODE_REGISTRY
-            
-            if WS_CLIENTS and buildings:
+            if len(manager) and buildings:
                 tick += 1
                 for b in buildings:
                     baseline = baselines.get(b["building_id"], 10000.0)
@@ -78,20 +76,7 @@ async def websocket_streamer():
                         "anomaly_reason": None
                     }
                     
-                    # Update local nodes registry
-                    NODE_REGISTRY[b["node_id"]] = reading
-                    
-                    # Broadcast telemetry packet
-                    dead = []
-                    for ws in WS_CLIENTS:
-                        try:
-                            await ws.send_json({"type": "telemetry", "data": reading})
-                        except Exception:
-                            dead.append(ws)
-                    
-                    for ws in dead:
-                        if ws in WS_CLIENTS:
-                            WS_CLIENTS.remove(ws)
+                    await manager.broadcast_telemetry(reading)
             
         except Exception as e:
             print(f"WebSocket Physics Streamer loop error: {e}")
